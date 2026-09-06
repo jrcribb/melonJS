@@ -5,6 +5,7 @@ import { level } from "./../level/level.js";
 import { vector2dPool } from "../math/vector2d.ts";
 import { boundsPool } from "./../physics/bounds.ts";
 import { collision } from "./../physics/collision.js";
+import { defer } from "./../utils/function.ts";
 import Renderable from "./renderable.js";
 
 /**
@@ -169,37 +170,46 @@ export default class Trigger extends Renderable {
 					const useMask = this.transition === "mask" && this.transitionShape;
 					const shape = this.transitionShape;
 
-					// wrap the user's onLoaded to add the reveal effect
-					const userOnLoaded = settings.onLoaded;
-					settings.onLoaded = function (levelId) {
-						// re-read viewport after game.reset reassigns it
-						const vp = app.viewport;
-						// reveal effect (same type as hide)
-						if (useMask) {
-							vp.addCameraEffect(
-								new MaskEffect(vp, {
-									shape,
-									color,
-									duration,
-									direction: "reveal",
-								}),
-							);
-						} else {
-							vp.addCameraEffect(
-								new FadeEffect(vp, {
-									color,
-									duration,
-									direction: "out",
-								}),
-							);
-						}
-						// call the user's onLoaded if any
-						if (typeof userOnLoaded === "function") {
-							userOnLoaded.call(this, levelId);
-						}
-					};
+					// Await the load rather than intercepting the caller's
+					// `onLoaded`: the reveal used to be injected by wrapping
+					// `settings.onLoaded` and calling the user's through it,
+					// which meant rewriting an option the caller passed in.
 					const onComplete = () => {
-						level.load(gotolevel, settings);
+						level
+							.load(gotolevel, { ...settings, async: true })
+							.then(() => {
+								// re-read AFTER the load: `game.reset()` reassigns
+								// `app.viewport`, so a viewport captured before it
+								// is stale by the time the reveal runs
+								const vp = app.viewport;
+								// reveal effect (same type as hide)
+								if (useMask) {
+									vp.addCameraEffect(
+										new MaskEffect(vp, {
+											shape,
+											color,
+											duration,
+											direction: "reveal",
+										}),
+									);
+								} else {
+									vp.addCameraEffect(
+										new FadeEffect(vp, {
+											color,
+											duration,
+											direction: "out",
+										}),
+									);
+								}
+							})
+							.catch((error) => {
+								// rethrow on an empty stack, so a failed transition
+								// surfaces as an uncaught error rather than a silent
+								// unhandled rejection
+								defer(() => {
+									throw error;
+								}, null);
+							});
 					};
 
 					// hide effect, then load level + reveal
